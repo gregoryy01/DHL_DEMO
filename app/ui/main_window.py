@@ -19,20 +19,20 @@ class OCRGUI:
         self._camera_map = {}
 
         self._build_ui()
+        self._bind_keys()
+
+        self.controller.scan_cameras()
         self._start_loop()
 
     def _build_ui(self):
-        # =========================
-        # TOP BAR
-        # =========================
         top = tk.Frame(self.root)
         top.pack(side=tk.TOP, fill=tk.X, pady=5)
 
         tk.Button(
             top,
-            text="Open Image",
+            text="Open Camera",
             width=15,
-            command=self.controller.open_image
+            command=self.controller.open_camera
         ).pack(side=tk.LEFT, padx=5)
 
         tk.Button(
@@ -74,8 +74,8 @@ class OCRGUI:
 
         tk.Button(
             top,
-            text="Trigger Read",
-            width=15,
+            text="Trigger Read [Space]",
+            width=18,
             bg="#ffd966",
             command=self.controller.trigger_inspection
         ).pack(side=tk.LEFT, padx=20)
@@ -84,7 +84,7 @@ class OCRGUI:
         self.status_label = tk.Label(
             top,
             textvariable=self.status_var,
-            width=14,
+            width=16,
             font=("Segoe UI", 12, "bold"),
             relief="groove",
             bd=2,
@@ -92,13 +92,21 @@ class OCRGUI:
         )
         self.status_label.pack(side=tk.LEFT, padx=10)
 
-        # =========================
-        # MAIN CONTENT
-        # =========================
+        self.fps_var = tk.StringVar(value="FPS: 0.0")
+        self.fps_label = tk.Label(
+            top,
+            textvariable=self.fps_var,
+            width=12,
+            font=("Segoe UI", 11, "bold"),
+            relief="groove",
+            bd=2,
+            bg="white"
+        )
+        self.fps_label.pack(side=tk.LEFT, padx=5)
+
         main = tk.Frame(self.root)
         main.pack(expand=True, fill=tk.BOTH)
 
-        # LEFT SIDE - CAMERA / IMAGE PREVIEW
         left = tk.Frame(main)
         left.pack(side=tk.LEFT, padx=10, pady=10)
 
@@ -110,24 +118,42 @@ class OCRGUI:
         )
         self.canvas.pack()
 
-        # RIGHT SIDE - RESULTS
         right = tk.Frame(main)
         right.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=10, pady=10)
 
-        # Waybill number
-        tk.Label(right, text="Detected Waybill Number:", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        tk.Label(
+            right,
+            text="Detected Waybill Number:",
+            font=("Segoe UI", 10, "bold")
+        ).pack(anchor="w")
         self.waybill_list = tk.Listbox(right, height=5)
         self.waybill_list.pack(fill=tk.X, pady=(0, 10))
 
-        # Barcode text
-        tk.Label(right, text="Detected Barcode Data:", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        tk.Label(
+            right,
+            text="Detected Barcode Data:",
+            font=("Segoe UI", 10, "bold")
+        ).pack(anchor="w")
         self.barcode_list = tk.Listbox(right, height=5)
         self.barcode_list.pack(fill=tk.X, pady=(0, 10))
 
-        # OCR raw text
-        tk.Label(right, text="OCR Raw Text:", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        tk.Label(
+            right,
+            text="OCR Raw Text:",
+            font=("Segoe UI", 10, "bold")
+        ).pack(anchor="w")
         self.text_box = tk.Text(right, height=15)
         self.text_box.pack(fill=tk.BOTH, expand=True)
+
+    def _bind_keys(self):
+        self.root.bind("<space>", self._on_space_trigger)
+        self.root.bind("<Escape>", self._on_escape)
+
+    def _on_space_trigger(self, event=None):
+        self.controller.trigger_inspection()
+
+    def _on_escape(self, event=None):
+        self.controller.stop_camera()
 
     def show_image(self, img_bgr):
         try:
@@ -168,24 +194,28 @@ class OCRGUI:
         for text in texts:
             self.text_box.insert(tk.END, text + "\n")
 
+    def clear_results(self):
+        self.update_waybill_list([])
+        self.update_barcode_list([])
+        self.update_raw_texts([])
+
     def update_status(self, text, color="lightgray"):
         self.status_var.set(text)
         self.status_label.config(bg=color)
 
+    def update_fps(self, fps_value):
+        self.fps_var.set(f"FPS: {fps_value:.1f}")
+
     def set_camera_options(self, camera_dict):
-        """
-        camera_dict example:
-        {
-            "Camera 0": 0,
-            "USB Camera": 1
-        }
-        """
         self._camera_map = camera_dict or {}
         values = list(self._camera_map.keys())
         self.camera_dropdown["values"] = values
 
         if values:
             self.camera_dropdown.current(0)
+            self.camera_var.set(values[0])
+        else:
+            self.camera_var.set("")
 
     def get_selected_camera_index(self):
         selected_name = self.camera_var.get()

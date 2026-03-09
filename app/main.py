@@ -1,6 +1,5 @@
 import tkinter as tk
-from ui import OCRGUI
-
+from app.ui import OCRGUI
 
 def main():
     root = tk.Tk()
