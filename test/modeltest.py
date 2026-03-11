@@ -3,7 +3,7 @@ from ultralytics import YOLO
 
 
 MODEL_PATH = "C:/Users/lenovo/Documents/GitHub/DHL_DEMO/models/detection/waybill_good.pt"   # change if needed
-CAMERA_INDEX = 2                     # change if needed
+CAMERA_INDEX = 0
 CONF_THRESHOLD = 0.4
 
 
