@@ -5,9 +5,9 @@ from ultralytics import YOLO
 # =========================
 # CONFIG
 # =========================
-IMAGE_PATH = r"C:/Users/lenovo/Documents/GitHub/DHL_DEMO/waybillex.jpg"
+IMAGE_PATH = r"C:/Users/lenovo/Documents/GitHub/DHL_DEMO/waybill3.jpeg"
 WAYBILL_MODEL_PATH = r"C:/Users/lenovo/Documents/GitHub/DHL_DEMO/models/detection/waybill_good.pt"
-READ_MODEL_PATH = r"C:/Users/lenovo/Documents/GitHub/DHL_DEMO/models/recognize/read64.pt"
+READ_MODEL_PATH = r"C:/Users/lenovo/Documents/GitHub/DHL_DEMO/models/recognize/read100.pt"
 OUTPUT_PATH = r"C:/Users/lenovo/Documents/GitHub/DHL_DEMO/data/results/result.jpg"
 
 WAYBILL_CONF = 0.45
