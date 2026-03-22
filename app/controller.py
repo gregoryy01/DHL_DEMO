@@ -1,12 +1,10 @@
 import time
-from pathlib import Path
 import cv2
 from tkinter import filedialog
 
 from app.storage.csv_logger import CSVLogger
 from app.storage.image_saver import ImageSaver
 from app.detection.barcode_reader import BarcodeReader
-from app.detection.waybill_detector import WaybillDetector
 from app.detection.waybill_reader import WaybillReader
 
 
@@ -22,11 +20,15 @@ class AppController:
         self.csv_logger = CSVLogger()
         self.image_saver = ImageSaver()
         self.barcode_reader = BarcodeReader()
-        self.waybill_detector = WaybillDetector(
-            model_path="models/detection/waybill_good.pt",
-            conf=0.40
+
+        self.waybill_reader = WaybillReader(
+            waybill_model_path="models/detection/waybill_good.pt",
+            read_model_path="models/recognize/read100.pt",
+            waybill_conf=0.45,
+            digit_conf=0.25,
+            roi_pad=0,
+            expected_length=10,
         )
-        self.waybill_reader = WaybillReader()
 
         self.last_frame_time = time.time()
         self.fps = 0.0
@@ -38,9 +40,13 @@ class AppController:
             "barcode": "BARCODE NOT FOUND",
             "ocr": "OCR NOT FOUND",
             "barcode_bbox": None,
+            "barcode_candidates": [],
             "waybill_bbox": None,
             "waybill_conf": None,
-            "raw_texts": []
+            "raw_texts": [],
+            "roi": None,
+            "waybill_found": False,
+            "ocr_valid": False,
         }
 
     # ----------------------------
@@ -63,7 +69,6 @@ class AppController:
             self.gui.update_status("NO CAMERA", "tomato")
 
     def open_camera(self):
-        # compatibility button from UI
         self.start_camera()
 
     def start_camera(self):
@@ -84,7 +89,6 @@ class AppController:
         self.gui.update_status(f"CAMERA {camera_index} ON", "lightgreen")
 
     def close_camera(self):
-        # compatibility alias
         self.stop_camera()
 
     def stop_camera(self):
@@ -110,7 +114,6 @@ class AppController:
 
         self.current_frame = frame.copy()
 
-        # live preview only, no OCR trigger here
         preview = frame.copy()
         self._update_fps()
         self._draw_fps(preview)
@@ -158,7 +161,7 @@ class AppController:
 
         self.gui.show_image(processed_frame)
         self._push_result_to_gui(result)
-        self.gui.update_status(f"IMAGE OCR DONE", "lightgreen")
+        self.gui.update_status("IMAGE OCR DONE", "lightgreen")
 
         self._save_and_log_if_useful(processed_frame, result)
 
@@ -170,121 +173,111 @@ class AppController:
             "barcode": "BARCODE NOT FOUND",
             "ocr": "OCR NOT FOUND",
             "barcode_bbox": None,
+            "barcode_candidates": [],
             "waybill_bbox": None,
             "waybill_conf": None,
-            "raw_texts": []
+            "raw_texts": [],
+            "roi": None,
+            "waybill_found": False,
+            "ocr_valid": False,
         }
 
-        # barcode
-        barcode_data, barcode_bbox = self._safe_read_barcode(frame)
+        # 1) Waybill detection + digit reading first
+        try:
+            wb = self.waybill_reader.process_frame(frame)
+        except Exception as e:
+            print(f"[WaybillReader Error] {e}")
+            wb = {
+                "frame": frame.copy(),
+                "number": None,
+                "valid": False,
+                "found": False,
+                "roi": None,
+            }
+
+        annotated_frame = wb["frame"]
+        result["waybill_found"] = bool(wb.get("found", False))
+        result["ocr_valid"] = bool(wb.get("valid", False))
+        result["roi"] = wb.get("roi", None)
+
+        if wb.get("number"):
+            result["ocr"] = wb["number"]
+
+        # 2) Barcode reading using OCR as preference
+        preferred_text = result["ocr"] if result["ocr"] != "OCR NOT FOUND" else None
+
+        barcode_data, barcode_bbox, barcode_candidates = self._safe_read_barcode(
+            frame,
+            preferred_text=preferred_text,
+            expected_digits_len=10,
+            return_all=True,
+        )
+
         if barcode_data:
             result["barcode"] = barcode_data
             result["barcode_bbox"] = barcode_bbox
-            result["raw_texts"].append(f"BARCODE: {barcode_data}")
 
-        # YOLO waybill detection
-        detections = self._safe_detect_waybill(frame)
-        best_detection = self._select_best_detection(detections)
+        result["barcode_candidates"] = barcode_candidates
 
-        if best_detection is not None:
-            x1, y1, x2, y2 = best_detection["bbox"]
-            result["waybill_bbox"] = (x1, y1, x2, y2)
-            result["waybill_conf"] = best_detection["confidence"]
+        # 3) Draw barcode overlay on top of annotated waybill frame
+        self._draw_barcode_overlay(annotated_frame, result)
 
-            roi = self._crop_roi(frame, x1, y1, x2, y2)
-            if roi is not None:
-                ocr_text = self.waybill_reader.read(roi)
-                if ocr_text:
-                    result["ocr"] = ocr_text
+        # 4) Build raw texts for GUI
+        if result["barcode"] != "BARCODE NOT FOUND":
+            result["raw_texts"].append(f"BARCODE: {result['barcode']}")
+        else:
+            result["raw_texts"].append("BARCODE: NOT FOUND")
+
+        if result["waybill_found"]:
+            if result["ocr"] != "OCR NOT FOUND":
                 result["raw_texts"].append(f"OCR: {result['ocr']}")
+            else:
+                result["raw_texts"].append("OCR: WAYBILL FOUND BUT NO READ")
+        else:
+            result["raw_texts"].append("OCR: NO WAYBILL DETECTED")
 
-        if not result["raw_texts"]:
-            result["raw_texts"].append("NO RESULT")
+        if barcode_candidates:
+            result["raw_texts"].append("BARCODE CANDIDATES:")
+            for c in barcode_candidates[:5]:
+                result["raw_texts"].append(
+                    f"- {c['data']} | score={c['score']} | digits={c['digits']}"
+                )
 
-        self._draw_result_overlay(frame, result)
-        self._draw_fps(frame)
-
-        return frame, result
+        self._draw_fps(annotated_frame)
+        return annotated_frame, result
 
     # ----------------------------
     # Helpers
     # ----------------------------
-    def _safe_read_barcode(self, frame):
+    def _safe_read_barcode(self, frame, preferred_text=None, expected_digits_len=10, return_all=False):
         try:
-            return self.barcode_reader.read(frame)
+            return self.barcode_reader.read(
+                frame,
+                preferred_text=preferred_text,
+                expected_digits_len=expected_digits_len,
+                return_all=return_all,
+            )
         except Exception as e:
             print(f"[BarcodeReader Error] {e}")
+            if return_all:
+                return None, None, []
             return None, None
 
-    def _safe_detect_waybill(self, frame):
-        try:
-            return self.waybill_detector.detect(frame)
-        except Exception as e:
-            print(f"[WaybillDetector Error] {e}")
-            return []
+    def _draw_barcode_overlay(self, frame, result):
+        if result["barcode_bbox"] is None:
+            return
 
-    def _select_best_detection(self, detections):
-        if not detections:
-            return None
-        return max(detections, key=lambda d: d["confidence"])
-
-    def _crop_roi(self, frame, x1, y1, x2, y2):
-        h, w = frame.shape[:2]
-
-        x1 = max(0, int(x1))
-        y1 = max(0, int(y1))
-        x2 = min(w, int(x2))
-        y2 = min(h, int(y2))
-
-        if x2 <= x1 or y2 <= y1:
-            return None
-
-        roi = frame[y1:y2, x1:x2]
-        if roi is None or roi.size == 0:
-            return None
-
-        return roi
-
-    def _draw_result_overlay(self, frame, result):
-        # barcode bbox
-        if result["barcode_bbox"] is not None:
-            x, y, w, h = result["barcode_bbox"]
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-            cv2.putText(
-                frame,
-                f"BARCODE: {result['barcode']}",
-                (x, max(20, y - 10)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 0, 0),
-                2
-            )
-
-        # waybill bbox
-        if result["waybill_bbox"] is not None:
-            x1, y1, x2, y2 = result["waybill_bbox"]
-            conf = result["waybill_conf"] if result["waybill_conf"] is not None else 0.0
-
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(
-                frame,
-                f"WAYBILL {conf:.2f}",
-                (x1, max(20, y1 - 10)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2
-            )
-
-            cv2.putText(
-                frame,
-                f"OCR: {result['ocr']}",
-                (x1, min(frame.shape[0] - 10, y2 + 25)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2
-            )
+        x, y, w, h = result["barcode_bbox"]
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+        cv2.putText(
+            frame,
+            f"BARCODE: {result['barcode']}",
+            (x, max(20, y - 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 0, 0),
+            2,
+        )
 
     def _push_result_to_gui(self, result):
         self.gui.update_waybill_list([result["ocr"]])
@@ -333,5 +326,5 @@ class AppController:
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8,
             (0, 255, 255),
-            2
+            2,
         )
